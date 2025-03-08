@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 import json
 
 from .config import CREATE_GROUP_SUFFIX
@@ -22,7 +22,8 @@ def create_group():
     """
     data = json.loads(request.data.decode('utf-8'))
     create_task = create_group_task.apply_async(args=(data.get('state'), data.get('code')))
-    set_task_id(CREATE_GROUP_SUFFIX, create_task.id, data.get('state'))
+    create_group_suffix = current_app.config.get('CREATE_GROUP_SUFFIX', CREATE_GROUP_SUFFIX)
+    set_task_id(create_group_suffix, create_task.id, data.get('state'))
     return jsonify({
         'code': 200,
         'message': 'Create group task created successfully',
@@ -38,7 +39,8 @@ def get_status():
             status (str): Task status
             error (str): Error message
     """
-    result = get_task_status(CREATE_GROUP_SUFFIX, request.args.get('entity_id'))
+    create_group_suffix = current_app.config.get('CREATE_GROUP_SUFFIX', CREATE_GROUP_SUFFIX)
+    result = get_task_status(create_group_suffix, request.args.get('entity_id'))
     if not result.get('create_status'):
         reset_redis(request.args.get('entity_id'))
     return jsonify(result)

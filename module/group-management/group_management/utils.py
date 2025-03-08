@@ -1,4 +1,5 @@
 from celery.result import AsyncResult
+from flask import current_app
 import csv
 import hashlib
 import json
@@ -38,8 +39,12 @@ def get_authorization(entity_id):
         redis.set(entity_id, '')
         # Get the client certificate
         replaced_entity_id = process_entity_id(entity_id)
-        cert_key = replaced_entity_id + CLIENT_CERT_SUFFIX
-        cert_dict = json.loads(redis.get(cert_key, {}))
+        cert_key = replaced_entity_id + current_app.config.get("CLIENT_CERT_SUFFIX",CLIENT_CERT_SUFFIX) 
+        cert_val = redis.get(cert_key)
+        cert_dict = {}
+        if cert_val:
+            cert_dict = json.loads(cert_val.decode())
+        
         if not cert_dict:
             # if the client certificate does not exist, get it
             issue_params = {
@@ -84,7 +89,9 @@ def set_management_info(entity_id, info):
         redis = RedisConnection().connection(MANAGEMENT_DB)
         # Save the group creation information to Redis
         replaced_entity_id = process_entity_id(entity_id)
-        redis.set(replaced_entity_id + MANAGEMENT_INFO_SUFFIX, json.dumps(info))
+        management_info_key = replaced_entity_id + \
+            current_app.config.get("MANAGEMENT_INFO_SUFFIX", MANAGEMENT_INFO_SUFFIX)
+        redis.set(management_info_key, json.dumps(info))
     except Exception as ex:
         if redis.keys(entity_id):
             redis.delete(entity_id)
@@ -107,8 +114,12 @@ def get_access_token(entity_id, authorization_code):
         redis = RedisConnection().connection(MANAGEMENT_DB)
         # Get the client certificate
         replaced_entity_id = process_entity_id(entity_id)
-        cert_key = replaced_entity_id + CLIENT_CERT_SUFFIX
-        cert_dict = json.loads(redis.get(cert_key))
+        cert_key = replaced_entity_id + \
+            current_app.config.get("CLIENT_CERT_SUFFIX",CLIENT_CERT_SUFFIX) 
+        cert_val = redis.get(cert_key)
+        if not cert_val:
+            raise Exception('Client certificate not found')
+        cert_dict = json.loads(cert_val.decode())
         # Get the access token
         data = {
             'grant_type': 'authorization_code',
@@ -121,9 +132,13 @@ def get_access_token(entity_id, authorization_code):
         response_json = response.json()
         return response_json.get('access_token')
     except Exception as ex:
-        if redis.get(replaced_entity_id + MANAGEMENT_INFO_SUFFIX):
-            redis.delete(replaced_entity_id + MANAGEMENT_INFO_SUFFIX)
-        redis.set(replaced_entity_id + CREATE_GROUP_ERR_SUFFIX, str(ex))
+        management_info_key = replaced_entity_id + \
+            current_app.config.get("MANAGEMENT_INFO_SUFFIX", MANAGEMENT_INFO_SUFFIX)
+        if redis.get(management_info_key):
+            redis.delete(management_info_key)
+        create_group_error_key = replaced_entity_id + \
+            current_app.config.get("CREATE_GROUP_ERR_SUFFIX", CREATE_GROUP_ERR_SUFFIX)
+        redis.set(create_group_error_key, str(ex))
         raise ex
     finally:
         redis.close()
@@ -140,9 +155,18 @@ def create_group(entity_id, access_token):
         redis = RedisConnection().connection(MANAGEMENT_DB)
         # Get the client certificate
         replaced_entity_id = process_entity_id(entity_id)
-        management_info = json.loads(redis.get(replaced_entity_id + MANAGEMENT_INFO_SUFFIX))
-        client_cert_key = replaced_entity_id + CLIENT_CERT_SUFFIX
-        client_cert = json.loads(redis.get(client_cert_key))
+        management_info_key = replaced_entity_id + \
+            current_app.config.get("MANAGEMENT_INFO_SUFFIX", MANAGEMENT_INFO_SUFFIX)
+        management_val = redis.get(management_info_key)
+        if not management_val:
+            raise Exception('Group creation information not found')
+        management_info = json.loads(management_val.decode())
+        client_cert_key = replaced_entity_id + \
+            current_app.config.get("CLIENT_CERT_SUFFIX", CLIENT_CERT_SUFFIX)
+        client_cert_val = redis.get(client_cert_key)
+        if not client_cert_val:
+            raise Exception('Client certificate not found')
+        client_cert = json.loads(client_cert_val.decode())
         client_secret = client_cert.get('client_secret')
         # Get the group information to be created
         group_info = management_info.get('group_info')
@@ -269,9 +293,13 @@ def create_group(entity_id, access_token):
         response = requests.put(update_group_url, data=data, headers=headers)
         response.raise_for_status()
     except Exception as ex:
-        if redis.get(replaced_entity_id + MANAGEMENT_INFO_SUFFIX):
-            redis.delete(replaced_entity_id + MANAGEMENT_INFO_SUFFIX)
-        redis.set(replaced_entity_id + CREATE_GROUP_ERR_SUFFIX, str(ex))
+        management_info_key = replaced_entity_id + \
+            current_app.config.get("MANAGEMENT_INFO_SUFFIX", MANAGEMENT_INFO_SUFFIX)
+        create_group_key = replaced_entity_id + \
+            current_app.config.get("CREATE_GROUP_SUFFIX", CREATE_GROUP_SUFFIX)
+        if redis.get(management_info_key):
+            redis.delete(management_info_key)
+        redis.set(create_group_key, str(ex))
         raise ex
     finally:
         redis.close()
@@ -365,15 +393,18 @@ def get_task_status(key, entity_id):
         # Get the task status from Redis
         replaced_entity_id = process_entity_id(entity_id)
         task_id = redis.get(replaced_entity_id + key)
+        error_key = replaced_entity_id + \
+                current_app.config.get("CREATE_GROUP_ERR_SUFFIX", CREATE_GROUP_ERR_SUFFIX)
         if task_id:
             result = AsyncResult(task_id)
             status_cond = result.successful() or result.failed() or result.state == 'REVOKED'
             status = result.status
             create_status = True if not status_cond else False
+        error_val = redis.get(error_key)
         return {
             'create_status': create_status,
             'status': status,
-            'error': redis.get(replaced_entity_id + CREATE_GROUP_ERR_SUFFIX)
+            'error': error_val.decode() if error_val else None
         }
     except Exception as ex:
         raise ex
@@ -389,8 +420,14 @@ def reset_redis(entity_id):
     redis = RedisConnection().connection(MANAGEMENT_DB)
     # Delete the keys in Redis
     replaced_entity_id = process_entity_id(entity_id)
+    management_info_key = replaced_entity_id + \
+        current_app.config.get("MANAGEMENT_INFO_SUFFIX", MANAGEMENT_INFO_SUFFIX)
+    create_group_key = replaced_entity_id + \
+        current_app.config.get("CREATE_GROUP_SUFFIX", CREATE_GROUP_SUFFIX)
+    create_group_error_key = replaced_entity_id + \
+        current_app.config.get("CREATE_GROUP_ERR_SUFFIX", CREATE_GROUP_ERR_SUFFIX)
     redis.delete(entity_id)
-    redis.delete(replaced_entity_id + MANAGEMENT_INFO_SUFFIX)
-    redis.delete(replaced_entity_id + CREATE_GROUP_SUFFIX)
-    redis.delete(replaced_entity_id + CREATE_GROUP_ERR_SUFFIX)
+    redis.delete(management_info_key)
+    redis.delete(create_group_key)
+    redis.delete(create_group_error_key)
     redis.close()
