@@ -8,6 +8,7 @@ import time
 from group_management.config import HOST_NAME
 from group_management.utils import get_authorization, set_management_info
 
+
 def main(entity_id, group_info, service, member_info):
     """Group management main function
     

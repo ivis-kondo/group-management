@@ -7,6 +7,14 @@ from mock import patch, Mock, MagicMock
 import requests
 from group_management.utils import create_group, generate_request_body, generate_signature, get_access_token, get_authorization, get_task_status, process_entity_id, reset_redis, set_management_info, set_task_id
 
+
+def create_mock_response(status_code, response_json):
+    response = requests.models.Response()
+    response.status_code = status_code
+    response.json = Mock(return_value=response_json)
+    return response
+
+
 def test_get_authorization(app, redis_connect):
     entity_id = "https://test-entity.org"
     cert_key = "test_entity_org" + app.config.get("CLIENT_CERT_SUFFIX")
@@ -210,44 +218,107 @@ def test_get_access_token(app, redis_connect, mocker):
             assert redis_connect.keys(error_key)
 
 
-# def test_create_group(app, redis_connect, mocker):
-#     entity_id = "https://test-entity.org"
-#     management_info_key = "test_entity_org" + \
-#             app.config.get("MANAGEMENT_INFO_SUFFIX")
-#     management_info_val = {
-#         "group_info": {
-#             "name": "test_group",
-#             "description": "test_description",
-#             "public": True
-#         },
-#         "service_id": "test_service",
-#         "member_info": "member_mock_data/test_member.tsv"
-#     }
-#     access_token = "test_token"
-#     group_id = "test_group_id"
-#     create_group_err_key = "test_entity_org" + app.config.get("CREATE_GROUP_ERR_SUFFIX")
-#     create_group_key = "test_entity_org" + app.config.get("CREATE_GROUP_SUFFIX")
-#     response_mock_value = {
-#         "name": "test_group",
-#         "description": "test_description",
-#         "public": True
-#     }
-#     service_name = "test_service"
-    
-#     # Test case 47: create group success
-#     with app.test_request_context():
-#         # Clear Redis
-#         redis_connect.delete(management_info_key)
-#         redis_connect.delete(create_group_err_key)
-#         redis_connect.delete(create_group_key)
-#         redis_connect.set(management_info_key, json.dumps(management_info_val))
-#         with patch("requests.post") as mockClient:
-#             response = requests.models.Response()
-#             response.status_code = 200
-#             response.json = Mock(return_value=response_mock_value)
-#             mockClient.return_value = response
-#             result = create_group(entity_id, access_token)
-#             assert result == response_mock_value["group_id"]
+def test_create_group(app, redis_connect, mock_users_api, mock_groups_api, mocker):
+    entity_id = "https://test-entity.org"
+    management_info_key = "test_entity_org" + \
+            app.config.get("MANAGEMENT_INFO_SUFFIX")
+    service_name = "test_service"
+    management_info_val_template = {
+        "group_info": {
+            "name": "test_group",
+            "description": "test_description",
+            "public": True
+        },
+        "service_id": service_name,
+        "member_info": ""
+    }
+    access_token = "test_token"
+    group_id = "test_group_id"
+    create_group_err_key = "test_entity_org" + app.config.get("CREATE_GROUP_ERR_SUFFIX")
+    create_group_key = "test_entity_org" + app.config.get("CREATE_GROUP_SUFFIX")
+    create_group_url_response = {
+        "totalResults": 1,
+        "startIndex": 0,
+        "itemPerPage": 10,
+        "Resources": [{
+            "id": group_id,
+            "displayName": "test_group",
+            "public": True,
+            "description": "test_description",
+            "meta": {
+                "resourceType": "Group",
+                "created": "2025-03-01T00:00:00Z",
+                "lastModified": "2025-03-01T00:00:00Z"
+            },
+            "members": [],
+            "administrators": [],
+            "services": []
+        }]
+    }
+    mock_json_get = mock_users_api + mock_groups_api
+
+    # Test case 47: create group success
+    with app.test_request_context():
+        # Clear Redis
+        redis_connect.delete(management_info_key)
+        redis_connect.delete(create_group_err_key)
+        redis_connect.delete(create_group_key)
+        management_info_val = management_info_val_template.copy()
+        management_info_val["member_info"] = "tests/member_mock_data/member_info_pattern1.tsv"
+        redis_connect.set(management_info_key, json.dumps(management_info_val))
+        with patch("requests.post") as mockPostClient:
+            mock_post_response = create_mock_response(200, create_group_url_response)
+            mockPostClient.return_value = mock_post_response
+            with patch("requests.get") as mockGetClient:
+                get_responses = [
+                    create_mock_response(200, get_mock_response)
+                    for get_mock_response in mock_json_get
+                ]
+                mockGetClient.side_effect = get_responses
+                with patch("requests.put",
+                           return_value=create_mock_response(200, {})) as mockPutClient:
+                    create_group(entity_id, access_token)
+                    mockPutClient.call_count == 3
+            # called only create-group
+            mockPostClient.assert_called_once()
+            
+    # Test case 48: User not exists
+    with app.test_request_context():
+        # Clear Redis
+        redis_connect.delete(management_info_key)
+        redis_connect.delete(create_group_err_key)
+        redis_connect.delete(create_group_key)
+        management_info_val = management_info_val_template.copy()
+        management_info_val["member_info"] = "tests/member_mock_data/member_info_pattern2.tsv"
+        redis_connect.set(management_info_key, json.dumps(management_info_val))
+        with patch("requests.post") as mockPostClient:
+            mock_post_response = create_mock_response(200, create_group_url_response)
+            mockPostClient.return_value = mock_post_response
+            with patch("requests.get") as mockGetClient:
+                mockGetClient.return_value = create_mock_response(200, {"totalResults": 0})
+                with patch("requests.put",
+                           return_value=create_mock_response(200, {})) as mockPutClient:
+                    create_group(entity_id, access_token)
+                    # called only update-group
+                    mockPutClient.assert_called_once()
+            mockPostClient.call_count == 4
+
+    # Test case 49: create-group API error
+    with app.test_request_context():
+        # Clear Redis
+        redis_connect.delete(management_info_key)
+        redis_connect.delete(create_group_err_key)
+        redis_connect.delete(create_group_key)
+        management_info_val = management_info_val_template.copy()
+        management_info_val["member_info"] = "tests/member_mock_data/member_info_pattern2.tsv"
+        redis_connect.set(management_info_key, json.dumps(management_info_val))
+        with pytest.raises(Exception) as ex:
+            with patch("requests.post") as mockPostClient:
+                mock_post_response = create_mock_response(400, {"error": "invalid_request"})
+                mockPostClient.return_value = mock_post_response
+                create_group(entity_id, access_token)
+        assert redis_connect.keys(management_info_key) == []
+        assert redis_connect.get(create_group_key).decode() == str(ex.value)
 
 
 def test_process_entity_id():

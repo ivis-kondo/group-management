@@ -23,6 +23,7 @@ def get_authorization(entity_id):
             result (str): Result
             value (str): Authorization URL or error message
     """
+    redis = None
     try:
         # Connect to Redis
         redis = RedisConnection().connection(MANAGEMENT_DB)
@@ -71,11 +72,12 @@ def get_authorization(entity_id):
             'value': authrequest_url
         }
     except Exception as ex:
-        if new_flg and redis.keys(entity_id):
+        if redis and new_flg and redis.keys(entity_id):
             redis.delete(entity_id)
         raise ex
     finally:
-        redis.close()
+        if redis:
+            redis.close()
 
 def set_management_info(entity_id, info):
     """Save the group creation information
@@ -191,92 +193,92 @@ def create_group(entity_id, access_token):
         if member_info_file:
             with open(member_info_file, 'r') as f:
                 member_info = csv.DictReader(f, delimiter='\t')
-            for member in member_info:
-                member_type = member.get('type')
-                if member_type == 'user':
-                    # Get the user information from mAP Core
-                    time_stamp = str(time.time())
-                    signature = generate_signature(access_token, time_stamp, client_secret)
-                    eppn = member.get('eppn')
-                    get_users_params = {
-                        'filter': 'eduPersonPrincipalNames.eduPersonPrincipalName eq "{}"'.format(eppn),
-                        'time_stamp': time_stamp,
-                        'signature': signature
-                    }
-                    get_users_url = '{}/Users?{}'.format(CORE_BASE_URL, urlencode(get_users_params))
-                    response = requests.get(get_users_url, headers=headers)
-                    response.raise_for_status()
-                    response_json = response.json()
-                    if response_json.get('totalResults') == 0:
-                        # Create a new user if the user does not exist
-                        user_data = {
-                            'userName': member.get('name'),
-                            'emails': [
-                                {
-                                    'value': member.get('email')
-                                }
-                            ],
-                            'eduPersonPrincipalNames': [
-                                {
-                                    'eduPersonPrincipalName': eppn
-                                }
-                            ]
+                for member in member_info:
+                    member_type = member.get('type')
+                    if member_type == 'user':
+                        # Get the user information from mAP Core
+                        time_stamp = str(time.time())
+                        signature = generate_signature(access_token, time_stamp, client_secret)
+                        eppn = member.get('eppn')
+                        get_users_params = {
+                            'filter': 'eduPersonPrincipalNames.eduPersonPrincipalName eq "{}"'.format(eppn),
+                            'time_stamp': time_stamp,
+                            'signature': signature
                         }
-                        data = generate_request_body(user_data, access_token, client_secret)
-                        create_user_url = '{}/Users'.format(CORE_BASE_URL)
-                        response = requests.post(create_user_url, data=data, headers=headers)
+                        get_users_url = '{}/Users?{}'.format(CORE_BASE_URL, urlencode(get_users_params))
+                        response = requests.get(get_users_url, headers=headers)
                         response.raise_for_status()
                         response_json = response.json()
-                    user = {
-                        'type': 'User',
-                        'value': response_json.get('Resources')[0].get('id')
-                    }
-                    user_auth = member.get('auth')
-                    # Add the user to the group with the authorization level
-                    if user_auth == USER_AUTHORIZATION.get('member'):
-                        members.append(user)
-                    elif user_auth == USER_AUTHORIZATION.get('admin'):
-                        user.pop('type')
-                        administrators.append(user)
-                    elif user_auth == USER_AUTHORIZATION.get('member_admin'):
-                        members.append(user)
-                        user.pop('type')
-                        administrators.append(user)
-                elif member_type == 'group':
-                    # Get the group information from mAP Core
-                    time_stamp = str(time.time())
-                    signature = generate_signature(access_token, time_stamp, client_secret)
-                    group_name = member.get('name')
-                    get_groups_params = {
-                        'filter': 'displayName eq "{}"'.format(group_name),
-                        'time_stamp': time_stamp,
-                        'signature': signature
-                    }
-                    get_groups_url = '{}/Groups?{}'.format(CORE_BASE_URL, urlencode(get_groups_params))
-                    response = requests.get(get_groups_url, headers=headers)
-                    response.raise_for_status()
-                    response_json = response.json()
-                    if response_json.get('totalResults') != 0:
-                        order = member.get('order')
-                        if order == 'higher':
-                            # Add the target group to the group
-                            resource = response_json.get('Resources')[0]
-                            group = {
-                                'type': 'Group',
-                                'value': target_group_resource.get('id')
+                        if response_json.get('totalResults') == 0:
+                            # Create a new user if the user does not exist
+                            user_data = {
+                                'userName': member.get('name'),
+                                'emails': [
+                                    {
+                                        'value': member.get('email')
+                                    }
+                                ],
+                                'eduPersonPrincipalNames': [
+                                    {
+                                        'eduPersonPrincipalName': eppn
+                                    }
+                                ]
                             }
-                            resource.get('members').append(group)
-                            data = generate_request_body(resource, access_token, client_secret)
-                            update_group_url = '{}/Groups/{}'.format(CORE_BASE_URL, resource.get('id'))
-                            response = requests.put(update_group_url, data=data, headers=headers)
+                            data = generate_request_body(user_data, access_token, client_secret)
+                            create_user_url = '{}/Users'.format(CORE_BASE_URL)
+                            response = requests.post(create_user_url, data=data, headers=headers)
                             response.raise_for_status()
-                        elif order == 'lower':
-                            # Add the group to the target group
-                            group = {
-                                'type': 'Group',
-                                'value': response_json.get('Resources')[0].get('id')
-                            }
-                            members.append(group)
+                            response_json = response.json()
+                        user = {
+                            'type': 'User',
+                            'value': response_json.get('Resources')[0].get('id')
+                        }
+                        user_auth = member.get('auth')
+                        # Add the user to the group with the authorization level
+                        if user_auth == USER_AUTHORIZATION.get('member'):
+                            members.append(user)
+                        elif user_auth == USER_AUTHORIZATION.get('admin'):
+                            user.pop('type')
+                            administrators.append(user)
+                        elif user_auth == USER_AUTHORIZATION.get('member_admin'):
+                            members.append(user)
+                            user.pop('type')
+                            administrators.append(user)
+                    elif member_type == 'group':
+                        # Get the group information from mAP Core
+                        time_stamp = str(time.time())
+                        signature = generate_signature(access_token, time_stamp, client_secret)
+                        group_name = member.get('name')
+                        get_groups_params = {
+                            'filter': 'displayName eq "{}"'.format(group_name),
+                            'time_stamp': time_stamp,
+                            'signature': signature
+                        }
+                        get_groups_url = '{}/Groups?{}'.format(CORE_BASE_URL, urlencode(get_groups_params))
+                        response = requests.get(get_groups_url, headers=headers)
+                        response.raise_for_status()
+                        response_json = response.json()
+                        if response_json.get('totalResults') != 0:
+                            order = member.get('order')
+                            if order == 'higher':
+                                # Add the target group to the group
+                                resource = response_json.get('Resources')[0]
+                                group = {
+                                    'type': 'Group',
+                                    'value': target_group_resource.get('id')
+                                }
+                                resource.get('members').append(group)
+                                data = generate_request_body(resource, access_token, client_secret)
+                                update_group_url = '{}/Groups/{}'.format(CORE_BASE_URL, resource.get('id'))
+                                response = requests.put(update_group_url, data=data, headers=headers)
+                                response.raise_for_status()
+                            elif order == 'lower':
+                                # Add the group to the target group
+                                group = {
+                                    'type': 'Group',
+                                    'value': response_json.get('Resources')[0].get('id')
+                                }
+                                members.append(group)
         
         # Get the services
         service = management_info.get('service')

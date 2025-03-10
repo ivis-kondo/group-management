@@ -1,5 +1,11 @@
+import subprocess
 import pytest
 from group_management.redis import RedisConnection
+from redis.client import Redis
+
+def stop_redis_container():
+    # Redisコンテナを停止する
+    subprocess.run(["docker", "stop", "redis"], check=True)
 
 def test_init_redis(app):
     """Test init_redis function"""
@@ -25,6 +31,7 @@ def test_connection(app):
         obj = RedisConnection()
         store = obj.connection(0)
         assert store is not None
+        assert type(store) == Redis
     
     # Test case 21: Test redis type is sentinel
     with app.app_context():
@@ -32,6 +39,7 @@ def test_connection(app):
         obj = RedisConnection()
         store = obj.connection(0)
         assert store is not None
+        assert type(store) == Redis
         
     # Test case 22: Test redis type is invalid
     with app.app_context():
@@ -40,13 +48,13 @@ def test_connection(app):
         store = obj.connection(0)
         assert store is None
 
-    # # Test case 23: Test redis DB limit over
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "redis"
-    #     with pytest.raises(Exception) as e:
-    #         obj = RedisConnection()
-    #         store = obj.connection(16)
-    #     print(e)
+    # Test case 23: Test redis DB is 16
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "redis"
+        obj = RedisConnection()
+        store = obj.connection(16)
+        assert store is not None
+        assert type(store) == Redis
 
 def test_redis_connection(app):
     """Test redis_connection function"""
@@ -57,30 +65,32 @@ def test_redis_connection(app):
         obj = RedisConnection()
         store = obj.redis_connection(0)
         assert store is not None
+        assert type(store) == Redis
     
-    # # Test case 25: connection is 16
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "redis"
-    #     obj = RedisConnection()
-    #     store = obj.redis_connection(16)
-    #     assert store is not None
-															
-    # # Test case 26: Redis is not running
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "redis"
-    #     with pytest.raises(Exception) as e:
-    #         obj = RedisConnection()
-    #         store = obj.redis_connection(0)
-    #     print(e)
+    # Test case 25: connection is 16
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "redis"
+        obj = RedisConnection()
+        store = obj.redis_connection(16)
+        assert store is not None
+        assert type(store) == Redis
 
-    # # Test case 27: Redis enviroment is sentinel
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "redis"
-    #     with pytest.raises(Exception) as e:
-    #         obj = RedisConnection()
-    #         store = obj.redis_connection(16)
-    #     print(e)
-    
+    # Test case 26: Redis is not running
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "redis"
+        obj = RedisConnection()
+        store = obj.redis_connection(0)
+        assert store is not None
+        assert type(store) == Redis
+        
+    # Test case 27: Redis enviroment is sentinel
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "sentinel"
+        obj = RedisConnection()
+        store = obj.redis_connection(0)
+        assert store is not None
+        assert type(store) == Redis
+
     # Test case 28: REDIS_URL is invalid
     with app.app_context():
         app.config["REDIS_URL"] = "test"
@@ -99,35 +109,38 @@ def test_sentinel_connection(app):
         obj = RedisConnection()
         store = obj.sentinel_connection(0)
         assert store is not None
+        assert type(store) == Redis
     
-    # # Test case 30: connection is 16
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "sentinel"
-    #     obj = RedisConnection()
-    #     store = obj.sentinel_connection(16)
-    #     assert store is not None
+    # Test case 30: connection is 16
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "sentinel"
+        obj = RedisConnection()
+        store = obj.sentinel_connection(16)
+        assert store is not None
+        assert type(store) == Redis
 															
-    # # Test case 31: Redis is not running
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "sentinel"
-    #     with pytest.raises(Exception) as e:
-    #         obj = RedisConnection()
-    #         store = obj.sentinel_connection(0)
-    #     print(e)
+    # Test case 31: Redis Sentinel is not running
+    # note: stop all redis containers before running this test
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "sentinel"
+        obj = RedisConnection()
+        store = obj.sentinel_connection(0)
+        assert store is not None
+        assert type(store) == Redis
 
-    # # Test case 32: Redis enviroment is sentinel
-    # with app.app_context():
-    #     app.config["CACHE_TYPE"] = "redis"
-    #     with pytest.raises(Exception) as e:
-    #         obj = RedisConnection()
-    #         store = obj.sentinel_connection(16)
-    #     print(e)
+    # Test case 32: Redis enviroment is redis
+    with app.app_context():
+        app.config["CACHE_TYPE"] = "redis"
+        obj = RedisConnection()
+        store = obj.sentinel_connection(0)
+        assert store is not None
+        assert type(store) == Redis
     
-    # # Test case 33: REDIS_SENTINELS is invalid
-    # with app.app_context():
-    #     app.config["REDIS_SENTINELS"] = [("invalid-sentinel-service.re","2637")]
-    #     app.config["CACHE_TYPE"] = "sentinel"
-    #     with pytest.raises(ValueError) as e:
-    #         obj = RedisConnection()
-    #         store = obj.sentinel_connection(0)
-    #     assert str(e.value) == "Redis URL must specify one of the following schemes (redis://, rediss://, unix://)"
+    # Test case 33: REDIS_SENTINELS is invalid
+    with app.app_context():
+        app.config["REDIS_SENTINELS"] = [("invalid-sentinel-service.re","2637")]
+        app.config["CACHE_TYPE"] = "sentinel"
+        obj = RedisConnection()
+        store = obj.sentinel_connection(0)
+        assert store is not None
+        assert type(store) == Redis
